@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+import time
+import serial
+
+class JetsonSerialClient:
+    def __init__(self, port: str, baud: int = 115200, timeout: float = 0.2):
+        self.ser = serial.Serial(port, baudrate=baud, timeout=timeout)
+        self.seq = 1
+
+    def _next_seq(self) -> int:
+        s = self.seq
+        self.seq = (self.seq + 1) % 65536
+        return s
+
+    def send_cmd(self, cmd: str, target: str, *args: str, retries: int = 2) -> str:
+        seq = self._next_seq()
+        line = ",".join([str(seq), cmd, target, *map(str, args)]) + "\n"
+
+        for attempt in range(retries + 1):
+            self.ser.write(line.encode("ascii"))
+            resp = self.ser.readline().decode("ascii", errors="replace").strip()
+
+            # 응답이 비거나 형식이 다르면 재시도
+            if not resp:
+                continue
+
+            parts = resp.split(",")
+            if len(parts) < 2:
+                continue
+
+            # SEQ 매칭
+            try:
+                rseq = int(parts[0])
+            except ValueError:
+                continue
+            if rseq != seq:
+                # 다른 SEQ 응답이 섞인 경우: 한 번 더 읽어보는 방식으로 확장 가능
+                continue
+
+            # OK / ERR 처리
+            if parts[1] == "OK":
+                return resp
+            if parts[1] == "ERR":
+                return resp
+
+        return f"{seq},ERR,TIMEOUT,NO_RESPONSE"
+
+    def close(self):
+        self.ser.close()
+
+def main():
+    # 포트는 환경에 맞게 수정: 예) /dev/ttyACM0, /dev/ttyUSB0
+    port = "/dev/ttyACM0"
+    cli = JetsonSerialClient(port)
+
+    print(cli.send_cmd("PING", "NA"))
+    print(cli.send_cmd("SV", "EAR_L", 140))
+    print(cli.send_cmd("SV", "EAR_R", 80))
+    print(cli.send_cmd("SV", "NECK_PITCH", 100))
+    print(cli.send_cmd("DC", "WHEEL_L", 120))
+    print(cli.send_cmd("DC", "WHEEL_R", 120))
+
+    time.sleep(0.5)
+    print(cli.send_cmd("STOP", "ALL"))
+
+    cli.close()
+
+if __name__ == "__main__":
+    main()
